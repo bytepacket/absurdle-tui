@@ -8,8 +8,13 @@
          type itself, but any type/struct that implement Write (shown in pub const fn new(writer: Write) -> Self)
 
  other stuff you should know:
-    &str vs String:
-    arrays vs slices:
+    &str vs String: String is an owned, heap-allocated String that is growable. &str is a collection of characters on the stack which you do not own.
+                    Since &str is a reference, you would think that str would give you the owned type, not quite. str is a dynamically sized type, meaning
+                    at compile-time, you do not know the size, which is bad. That's why you hide it behind a pointer, so it references the data instead of
+                    owning something that has an arbitrary length.
+    arrays vs slices: Arrays are owned types, defined by [T; N], where T is type and N is size. It is stored on the stack. A slice is represented as &[T]
+                      A slice is a view into an array, so it does not own something, but only borrows the data. A slice contains two things, the length and its
+                      size, which means from this we can figure out the size at runtime. It can also be said that a &str is similar to a slice as well.
 */
 
 
@@ -111,6 +116,7 @@ struct App {
     remaining: Vec<&'static str>, // remaining words
     input: String, // input
     history: Vec<GuessEntry>,
+    restart_feedback: Option<String>, // possible answers from the previous run, shown after Ctrl-R restart
     status: String, // self-explanatory, prints out in the text bar under the game
     status_level: StatusLevel, // self-explanatory
     won: bool, // self-explanatory
@@ -129,6 +135,7 @@ impl App {
             dictionary_set,
             input: String::new(),
             history: Vec::new(),
+            restart_feedback: None,
             status: "Type a five-letter word and press Enter.".to_string(), // starting message
             status_level: StatusLevel::Info,
             won: false,
@@ -138,19 +145,43 @@ impl App {
 
     // ran after user puts Ctrl-R (check on_key function)
     fn restart(&mut self) {
+        // if the player gives up mid-game, save the possible answers so we can show it after the restart
+        let previous_feedback = if !self.won && !self.history.is_empty() {
+            Some(format!(
+                "Possible answers before restart ({}): {}",
+                self.remaining.len(),
+                self.remaining.join(", ")
+            ))
+        } else {
+            None
+        };
+
         // takes the dictionary and clones it
         self.remaining = self.dictionary.clone();
         // clears input
         self.input.clear();
         // clears history of input
         self.history.clear();
+        // keep a copy of previous pool so we can render it as feedback in the fresh session
+        self.restart_feedback = previous_feedback;
         // set won bool to false
         self.won = false;
+
         // changes status and adds a new one as an Info
-        self.set_status("New game started.", StatusLevel::Info);
+        if self.restart_feedback.is_some() {
+            self.set_status(
+                "New game started. Previous possible answers are shown on the board.",
+                StatusLevel::Info,
+            );
+        } else {
+            self.set_status(
+                format!("New game started. {} possible answers.", self.remaining.len()),
+                StatusLevel::Info,
+            );
+        }
     }
 
-    // Ctrl-C and Ctrl-R are the only implemented keybinds, as said we have to implement our own since we use raw mode
+    // Ctrl-C and Ctrl-R are implemented keybinds, as said we have to implement our own since we use raw mode
     fn on_key(&mut self, key: KeyEvent) {
         // if the key pressed is the Control key
         if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -523,10 +554,18 @@ fn draw_ui(frame: &mut Frame, app: &App) {
 
     // first-launch helper text in row 1 until the first guess is submitted
     if app.history.is_empty() {
-        board_lines[0] = Line::from(Span::styled(
-            "Start typing below and press Enter to guess.",
-            Style::default().fg(Color::Gray),
-        ));
+        // if game was restarted mid-run, show the old remaining pool as feedback before first new guess
+        if let Some(restart_feedback) = app.restart_feedback.as_deref() {
+            board_lines[0] = Line::from(Span::styled(
+                restart_feedback,
+                Style::default().fg(Color::Gray),
+            ));
+        } else {
+            board_lines[0] = Line::from(Span::styled(
+                "Start typing below and press Enter to guess.",
+                Style::default().fg(Color::Gray),
+            ));
+        }
     };
 
     let history = Paragraph::new(board_lines)
